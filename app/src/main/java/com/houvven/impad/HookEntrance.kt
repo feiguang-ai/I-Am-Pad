@@ -66,11 +66,29 @@ class HookEntrance : XposedModule() {
         PackageRoute(
             match = ::isCustomWeWork,
             handle = ::processCustomWeWork
+        ),
+        PackageRoute(
+            match = { it.packageName == "com.alibaba.taurus.zhejiang" },
+            handle = ::processTaurusZhejiang
         )
     )
 
     override fun onPackageReady(param: XposedModuleInterface.PackageReadyParam) {
         packageRoutes.firstOrNull { it.match(param) }?.handle?.invoke()
+    }
+
+    private fun processTaurusZhejiang() = afterApplicationAttach {
+        hookDexMethodToReturn("taurus_isPad_method", it, true) {
+            getClassData("com.alibaba.dinggov.util.DeviceUtil".toClass())!!
+                .findMethod {
+                    matcher {
+                        paramTypes(Context::class.java)
+                        paramCount(1)
+                        returnType(Boolean::class.javaPrimitiveType!!)
+                        addUsingString("app_config")
+                    }
+                }.single().toDexMethod()
+        }
     }
 
     private fun processQQ() {
