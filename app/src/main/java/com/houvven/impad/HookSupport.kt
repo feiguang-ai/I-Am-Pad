@@ -95,12 +95,12 @@ internal fun XposedModule.hookAllToReturn(methods: Iterable<Method>, value: Any?
 }
 
 internal fun XposedModule.simulateTabletProperties() {
-    "android.os.SystemProperties".toClass().resolve().firstMethod {
+    "android.os.SystemProperties".toClass().resolve().method {
         name("get")
         returnType(String::class)
-    }.self.let {
-        hook(it).intercept { chain ->
-            if (chain.args[0] == "ro.build.characteristics") {
+    }.forEach { method ->
+        hook(method.self).intercept { chain ->
+            if (chain.args.firstOrNull() == "ro.build.characteristics") {
                 return@intercept "tablet"
             }
             return@intercept chain.proceed()

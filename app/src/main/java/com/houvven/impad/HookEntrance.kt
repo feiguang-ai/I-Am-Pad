@@ -22,6 +22,7 @@ class HookEntrance : XposedModule() {
         private const val TAG = BuildConfig.APPLICATION_ID
         private const val DEXKIT_PREFS_NAME = "IAMPAD_dexkit"
         private const val QQ_TARGET_MODEL = "23046RP50C"
+        private const val XHS_TARGET_MODEL = "23046RP50C"
         private const val QQ_BUGLY_PREFS_NAME = "BUGLY_COMMON_VALUES"
         private const val QQ_PANDORA_CACHE_PATH = "files/mmkv/Pandora"
         private const val QQ_PANDORA_CRC_PATH = "files/mmkv/Pandora.crc"
@@ -39,38 +40,38 @@ class HookEntrance : XposedModule() {
 
     private data class PackageRoute(
         val match: (XposedModuleInterface.PackageReadyParam) -> Boolean,
-        val handle: () -> Unit
+        val handle: (XposedModuleInterface.PackageReadyParam) -> Unit
     )
 
     private val packageRoutes = listOf(
         PackageRoute(
             match = { it.packageName.contains("com.tencent.mobileqq") },
-            handle = ::processQQ
+            handle = { processQQ() }
         ),
         PackageRoute(
             match = { it.packageName.contains("com.tencent.mm") },
-            handle = ::processWeChat
+            handle = { processWeChat() }
         ),
         PackageRoute(
             match = { it.packageName.contains("com.tencent.wework") },
-            handle = ::processWeWork
+            handle = { processWeWork() }
         ),
         PackageRoute(
             match = { it.packageName.contains("com.xingin.xhs") },
-            handle = ::processXhs
+            handle = { processXhs(it.classLoader) }
         ),
         PackageRoute(
             match = ::isDingTalk,
-            handle = ::processDingTalk
+            handle = { processDingTalk() }
         ),
         PackageRoute(
             match = ::isCustomWeWork,
-            handle = ::processCustomWeWork
+            handle = { processCustomWeWork() }
         )
     )
 
     override fun onPackageReady(param: XposedModuleInterface.PackageReadyParam) {
-        packageRoutes.firstOrNull { it.match(param) }?.handle?.invoke()
+        packageRoutes.firstOrNull { it.match(param) }?.handle?.invoke(param)
     }
 
     private fun processQQ() {
@@ -167,10 +168,68 @@ class HookEntrance : XposedModule() {
         }
     }
 
-    private fun processXhs() {
-        "com.xingin.adaptation.device.DeviceInfoContainer".toClass().resolve().run {
-            hookAllToReturn(method { name("isPad") }.map { it.self }, true)
-            hookAllToReturn(method { name("getSavedDeviceType") }.map { it.self }, "pad")
+    private fun processXhs(classLoader: ClassLoader) {
+        runCatching {
+            // XHS now sends the accurate model to /api/sns/v1/system/device_type and
+            // uses the server-side classification for its login/session identity.
+            simulateTabletModel("Xiaomi", XHS_TARGET_MODEL)
+            simulateTabletProperties()
+
+            "com.xingin.adaptation.device.DeviceInfoContainer".toClass(classLoader).resolve().run {
+                val isPadMethods = method { name("isPad") }.map { it.self }
+                val isPhoneMethods = method { name("isPhone") }.map { it.self }
+                val deviceTypeMethods = method { name("getDeviceType") }.map { it.self }
+                val savedDeviceTypeMethods = method { name("getSavedDeviceType") }.map { it.self }
+                val predictPadMethods = method { name("predictPad") }.map { it.self }
+                val systemTabletMethods = method { name("systemPropertyIsTablet") }.map { it.self }
+                val accurateModelMethods = method { name("getDeviceAccurateModel") }.map { it.self }
+                val updateCloudDeviceTypeMethods = method {
+                    name("updateCloudDeviceType")
+                }.map { it.self }
+                val hasCloudInfoMethods = method { name("hasCloudDeviceTypeInfo") }.map { it.self }
+                val cloudUpdateTimeMethods = method {
+                    name("getCloudDeviceTypeUpdateTime")
+                }.map { it.self }
+
+                hookAllToReturn(isPadMethods, true)
+                hookAllToReturn(isPhoneMethods, false)
+                hookAllToReturn(deviceTypeMethods, "pad")
+                hookAllToReturn(savedDeviceTypeMethods, "pad")
+                hookAllToReturn(predictPadMethods, true)
+                hookAllToReturn(systemTabletMethods, true)
+                hookAllToReturn(accurateModelMethods, XHS_TARGET_MODEL)
+                hookAllToReturn(hasCloudInfoMethods, true)
+                hookAllToReturn(cloudUpdateTimeMethods, 0L)
+                updateCloudDeviceTypeMethods.forEach { method ->
+                    hook(method).intercept { chain ->
+                        val requestedType = chain.args.firstOrNull()
+                        chain.args[0] = "pad"
+                        log(
+                            Log.INFO,
+                            TAG,
+                            "XHS cloud device type: requested=$requestedType, forced=pad"
+                        )
+                        chain.proceed()
+                    }
+                }
+
+                log(
+                    Log.INFO,
+                    TAG,
+                    "Installed XHS full pad hooks: isPad=${isPadMethods.size}, " +
+                        "isPhone=${isPhoneMethods.size}, getDeviceType=${deviceTypeMethods.size}, " +
+                        "getSavedDeviceType=${savedDeviceTypeMethods.size}, " +
+                        "predictPad=${predictPadMethods.size}, " +
+                        "systemPropertyIsTablet=${systemTabletMethods.size}, " +
+                        "getDeviceAccurateModel=${accurateModelMethods.size}, " +
+                        "updateCloudDeviceType=${updateCloudDeviceTypeMethods.size}, " +
+                        "hasCloudDeviceTypeInfo=${hasCloudInfoMethods.size}, " +
+                        "getCloudDeviceTypeUpdateTime=${cloudUpdateTimeMethods.size}, " +
+                        "model=$XHS_TARGET_MODEL"
+                )
+            }
+        }.onFailure {
+            log(Log.ERROR, TAG, "Failed to install XHS hooks: ${it.stackTraceToString()}")
         }
     }
 
