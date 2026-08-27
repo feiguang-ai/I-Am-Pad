@@ -170,61 +170,25 @@ class HookEntrance : XposedModule() {
 
     private fun processXhs(classLoader: ClassLoader) {
         runCatching {
-            // XHS now sends the accurate model to /api/sns/v1/system/device_type and
-            // uses the server-side classification for its login/session identity.
-            simulateTabletModel("Xiaomi", XHS_TARGET_MODEL)
-            simulateTabletProperties()
-
+            // XHS decides the device type via the server-side classification: the
+            // accurate model is sent to /api/sns/v1/system/device_type and the reply
+            // is cached in key_device_type_from_cloud. Spoof the model sent in the
+            // request and pin the local device type to "pad".
             "com.xingin.adaptation.device.DeviceInfoContainer".toClass(classLoader).resolve().run {
-                val isPadMethods = method { name("isPad") }.map { it.self }
-                val isPhoneMethods = method { name("isPhone") }.map { it.self }
                 val deviceTypeMethods = method { name("getDeviceType") }.map { it.self }
                 val savedDeviceTypeMethods = method { name("getSavedDeviceType") }.map { it.self }
-                val predictPadMethods = method { name("predictPad") }.map { it.self }
-                val systemTabletMethods = method { name("systemPropertyIsTablet") }.map { it.self }
                 val accurateModelMethods = method { name("getDeviceAccurateModel") }.map { it.self }
-                val updateCloudDeviceTypeMethods = method {
-                    name("updateCloudDeviceType")
-                }.map { it.self }
-                val hasCloudInfoMethods = method { name("hasCloudDeviceTypeInfo") }.map { it.self }
-                val cloudUpdateTimeMethods = method {
-                    name("getCloudDeviceTypeUpdateTime")
-                }.map { it.self }
 
-                hookAllToReturn(isPadMethods, true)
-                hookAllToReturn(isPhoneMethods, false)
                 hookAllToReturn(deviceTypeMethods, "pad")
                 hookAllToReturn(savedDeviceTypeMethods, "pad")
-                hookAllToReturn(predictPadMethods, true)
-                hookAllToReturn(systemTabletMethods, true)
                 hookAllToReturn(accurateModelMethods, XHS_TARGET_MODEL)
-                hookAllToReturn(hasCloudInfoMethods, true)
-                hookAllToReturn(cloudUpdateTimeMethods, 0L)
-                updateCloudDeviceTypeMethods.forEach { method ->
-                    hook(method).intercept { chain ->
-                        val requestedType = chain.args.firstOrNull()
-                        chain.args[0] = "pad"
-                        log(
-                            Log.INFO,
-                            TAG,
-                            "XHS cloud device type: requested=$requestedType, forced=pad"
-                        )
-                        chain.proceed()
-                    }
-                }
 
                 log(
                     Log.INFO,
                     TAG,
-                    "Installed XHS full pad hooks: isPad=${isPadMethods.size}, " +
-                        "isPhone=${isPhoneMethods.size}, getDeviceType=${deviceTypeMethods.size}, " +
+                    "Installed XHS pad hooks: getDeviceType=${deviceTypeMethods.size}, " +
                         "getSavedDeviceType=${savedDeviceTypeMethods.size}, " +
-                        "predictPad=${predictPadMethods.size}, " +
-                        "systemPropertyIsTablet=${systemTabletMethods.size}, " +
                         "getDeviceAccurateModel=${accurateModelMethods.size}, " +
-                        "updateCloudDeviceType=${updateCloudDeviceTypeMethods.size}, " +
-                        "hasCloudDeviceTypeInfo=${hasCloudInfoMethods.size}, " +
-                        "getCloudDeviceTypeUpdateTime=${cloudUpdateTimeMethods.size}, " +
                         "model=$XHS_TARGET_MODEL"
                 )
             }
