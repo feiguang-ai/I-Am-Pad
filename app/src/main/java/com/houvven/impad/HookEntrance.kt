@@ -118,6 +118,17 @@ class HookEntrance : XposedModule() {
                     usingStrings("royole", "tecno", "ro.os_foldable_screen_support")
                     returnType(Boolean::class.javaPrimitiveType!!)
                 }
+            }.singleOrNull()?.toDexMethod() ?: findMethod {
+                searchPackages("com.tencent.mm.ui")
+                matcher {
+                    modifiers(Modifier.PUBLIC or Modifier.STATIC)
+                    paramCount(0)
+                    returnType(Boolean::class.javaPrimitiveType!!)
+                    invokeMethods {
+                        add { usingStrings("royole") }
+                        add { usingStrings("ro.os_foldable_screen_support") }
+                    }
+                }
             }.single().toDexMethod()
         }
     }
