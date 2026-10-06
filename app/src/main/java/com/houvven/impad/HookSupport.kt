@@ -2,7 +2,6 @@ package com.houvven.impad
 
 import android.app.Application
 import android.content.Context
-import android.content.SharedPreferences
 import android.util.Log
 import com.highcapable.kavaref.KavaRef.Companion.resolve
 import com.highcapable.kavaref.extension.toClass
@@ -10,11 +9,13 @@ import com.highcapable.kavaref.extension.toClassOrNull
 import io.github.libxposed.api.XposedModule
 import org.luckypray.dexkit.DexKitBridge
 import org.luckypray.dexkit.wrap.DexMethod
+import java.io.File
 import java.lang.reflect.Method
+import java.util.Properties
 
 internal class DexMethodCache(
     private val module: XposedModule,
-    private val prefs: SharedPreferences,
+    private val cacheFile: File,
 ) {
 
     companion object {
@@ -22,6 +23,14 @@ internal class DexMethodCache(
     }
 
     private var dexkit: DexKitBridge? = null
+
+    private val props: Properties by lazy {
+        Properties().apply {
+            runCatching {
+                if (cacheFile.isFile) cacheFile.inputStream().use { load(it) }
+            }
+        }
+    }
 
     fun findOrLoad(
         cacheKey: String,
@@ -31,7 +40,7 @@ internal class DexMethodCache(
         loadCachedMethod(cacheKey, classLoader)?.let { return it }
 
         val foundMethod = requireDexkit(classLoader).finder()
-        prefs.edit().putString(cacheKey, foundMethod.serialize()).apply()
+        store(cacheKey, foundMethod.serialize())
         return foundMethod.getMethodInstance(classLoader).also {
             module.log(Log.DEBUG, TAG, "Found new method [$cacheKey]: $it")
         }
@@ -39,19 +48,33 @@ internal class DexMethodCache(
 
     private fun loadCachedMethod(cacheKey: String, classLoader: ClassLoader): Method? {
         val serializedMethod =
-            prefs.getString(cacheKey, null)?.takeIf { it.isNotBlank() } ?: return null
+            props.getProperty(cacheKey)?.takeIf { it.isNotBlank() } ?: return null
         return runCatching {
             DexMethod(serializedMethod).getMethodInstance(classLoader)
         }.onSuccess {
             module.log(Log.DEBUG, TAG, "Loaded cached method [$cacheKey]: $it")
         }.onFailure {
-            prefs.edit().remove(cacheKey).apply()
+            props.remove(cacheKey)
             module.log(
                 Log.WARN,
                 TAG,
                 "Cached method invalid [$cacheKey], fallback to DexKit: ${it.message}"
             )
         }.getOrNull()
+    }
+
+    private fun store(cacheKey: String, serialized: String) {
+        runCatching {
+            props.setProperty(cacheKey, serialized)
+            val parent = cacheFile.parentFile ?: return@runCatching
+            parent.mkdirs()
+            val tmp = File(parent, "${cacheFile.name}.tmp.${android.os.Process.myPid()}")
+            tmp.outputStream().use { props.store(it, null) }
+            if (!tmp.renameTo(cacheFile)) {
+                tmp.copyTo(cacheFile, overwrite = true)
+                tmp.delete()
+            }
+        }
     }
 
     private fun requireDexkit(classLoader: ClassLoader): DexKitBridge {

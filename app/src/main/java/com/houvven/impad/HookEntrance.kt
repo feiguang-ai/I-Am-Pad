@@ -50,7 +50,7 @@ class HookEntrance : XposedModule() {
         ),
         PackageRoute(
             match = { it.packageName.contains("com.tencent.mm") },
-            handle = { processWeChat() }
+            handle = { processWeChat(it) }
         ),
         PackageRoute(
             match = { it.packageName.contains("com.tencent.wework") },
@@ -89,47 +89,59 @@ class HookEntrance : XposedModule() {
         }
     }
 
-    private fun processWeChat() = afterApplicationAttach { context ->
-        hookDexMethodToReturn("checkLoginAsPad_method", context, true) {
-            findMethod {
-                excludePackages("android", "androidx", "com")
-                matcher {
-                    modifiers(Modifier.PUBLIC or Modifier.FINAL)
-                    paramCount(3)
-                    paramTypes(
-                        String::class.java,
-                        String::class.java,
-                        Continuation::class.java
-                    )
-                    usingStrings(
-                        "MicroMsg.CgiCheckLoginAsPad",
-                        "/cgi-bin/micromsg-bin/checkloginaspad"
-                    )
-                }
-            }.single().toDexMethod()
-        }
-
-        hookDexMethodToReturn("isFoldableDevice_method", context, true) {
-            findMethod {
-                searchPackages("com.tencent.mm.ui")
-                matcher {
-                    modifiers(Modifier.PUBLIC or Modifier.STATIC)
-                    paramCount(0)
-                    usingStrings("royole", "tecno", "ro.os_foldable_screen_support")
-                    returnType(Boolean::class.javaPrimitiveType!!)
-                }
-            }.singleOrNull()?.toDexMethod() ?: findMethod {
-                searchPackages("com.tencent.mm.ui")
-                matcher {
-                    modifiers(Modifier.PUBLIC or Modifier.STATIC)
-                    paramCount(0)
-                    returnType(Boolean::class.javaPrimitiveType!!)
-                    invokeMethods {
-                        add { usingStrings("royole") }
-                        add { usingStrings("ro.os_foldable_screen_support") }
+    private fun processWeChat(param: XposedModuleInterface.PackageReadyParam) {
+        // Hook directly in onPackageReady instead of deferring to Application attach.
+        // The classloader is already usable here (same one the Application is created
+        // from), and this avoids relying on early-lifecycle hook dispatch which has
+        // proven unreliable on some frameworks (e.g. Vector/libxposed).
+        val classLoader = param.classLoader
+        val dataDir = param.applicationInfo.dataDir
+        runCatching {
+            hookDexMethodToReturn("checkLoginAsPad_method", classLoader, dataDir, true) {
+                findMethod {
+                    excludePackages("android", "androidx", "com")
+                    matcher {
+                        modifiers(Modifier.PUBLIC or Modifier.FINAL)
+                        paramCount(3)
+                        paramTypes(
+                            String::class.java,
+                            String::class.java,
+                            Continuation::class.java
+                        )
+                        usingStrings(
+                            "MicroMsg.CgiCheckLoginAsPad",
+                            "/cgi-bin/micromsg-bin/checkloginaspad"
+                        )
                     }
-                }
-            }.single().toDexMethod()
+                }.single().toDexMethod()
+            }
+
+            hookDexMethodToReturn("isFoldableDevice_method", classLoader, dataDir, true) {
+                findMethod {
+                    searchPackages("com.tencent.mm.ui")
+                    matcher {
+                        modifiers(Modifier.PUBLIC or Modifier.STATIC)
+                        paramCount(0)
+                        usingStrings("royole", "tecno", "ro.os_foldable_screen_support")
+                        returnType(Boolean::class.javaPrimitiveType!!)
+                    }
+                }.singleOrNull()?.toDexMethod() ?: findMethod {
+                    searchPackages("com.tencent.mm.ui")
+                    matcher {
+                        modifiers(Modifier.PUBLIC or Modifier.STATIC)
+                        paramCount(0)
+                        returnType(Boolean::class.javaPrimitiveType!!)
+                        invokeMethods {
+                            add { usingStrings("royole") }
+                            add { usingStrings("ro.os_foldable_screen_support") }
+                        }
+                    }
+                }.single().toDexMethod()
+            }
+
+            log(Log.INFO, TAG, "Installed WeChat pad hooks (direct, onPackageReady)")
+        }.onFailure {
+            log(Log.ERROR, TAG, "Failed to install WeChat hooks: ${it.stackTraceToString()}")
         }
     }
 
@@ -147,7 +159,12 @@ class HookEntrance : XposedModule() {
     }
 
     private fun processDingTalk() = afterApplicationAttach { context ->
-        hookDexMethodToReturn("isMultiLoginFoldableDevice_method", context, true) {
+        hookDexMethodToReturn(
+            "isMultiLoginFoldableDevice_method",
+            context.classLoader,
+            context.applicationInfo.dataDir,
+            true
+        ) {
             findMethod {
                 searchPackages("com.alibaba.android.dingtalkbase.foldable")
                 matcher {
@@ -162,7 +179,12 @@ class HookEntrance : XposedModule() {
     }
 
     private fun processCustomWeWork() = afterApplicationAttach { context ->
-        hookDexMethodToReturn("isPadJudge_method", context, true) {
+        hookDexMethodToReturn(
+            "isPadJudge_method",
+            context.classLoader,
+            context.applicationInfo.dataDir,
+            true
+        ) {
             findMethod {
                 matcher {
                     declaredClass("com.tencent.wework.common.utils.WwUtil")
@@ -210,19 +232,19 @@ class HookEntrance : XposedModule() {
 
     private fun hookDexMethodToReturn(
         cacheKey: String,
-        context: Context,
+        classLoader: ClassLoader,
+        dataDir: String,
         value: Any?,
         finder: DexKitBridge.() -> DexMethod
     ) {
-        val classLoader = context.classLoader
-        hookToReturn(requireMethodCache(context).findOrLoad(cacheKey, classLoader, finder), value)
+        hookToReturn(requireMethodCache(dataDir).findOrLoad(cacheKey, classLoader, finder), value)
     }
 
-    private fun requireMethodCache(context: Context): DexMethodCache {
+    private fun requireMethodCache(dataDir: String): DexMethodCache {
         methodCache?.let { return it }
         return DexMethodCache(
             module = this,
-            prefs = context.getSharedPreferences(DEXKIT_PREFS_NAME, Context.MODE_PRIVATE)
+            cacheFile = File(dataDir, "files/$DEXKIT_PREFS_NAME.properties")
         ).also { methodCache = it }
     }
 

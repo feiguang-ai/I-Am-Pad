@@ -19,8 +19,8 @@ android {
         applicationId = namespace
         minSdk = 27
         targetSdk = 36
-        versionCode = 13
-        versionName = "1.1.2"
+        versionCode = 14
+        versionName = "1.1.3"
     }
 
     signingConfigs {
